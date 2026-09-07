@@ -1,5 +1,6 @@
 """main file"""
 from PIL import Image, ImageDraw, ImageFont
+import json
 
 import streamlit
 from google import genai
@@ -31,7 +32,7 @@ class RollNoDetection(BaseModel):
 
 detection_list_adapter = TypeAdapter(list[RollNoDetection])
 
-available_models = ["gemini-3.7-flash", "gemini-3.6-flash"]
+available_models = ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.8-flash"]
 
 @streamlit.cache_data(scope="session", show_spinner=False)
 def extract_rollno(image_name: str, _image_bytes: bytes, mimetype: str,
@@ -82,10 +83,15 @@ streamlit.title("Attendance2Sheet")
 streamlit.header("Upload the attendance sheet photo")
 image = streamlit.file_uploader(
     "Upload the attendance sheet image", 
+    key="uploaded_image",
     type="image/*",
     max_upload_size=10,
     accept_multiple_files=False,
 )
+
+if "uploaded_image" not in streamlit.session_state:
+    streamlit.error("uploaded_image not in session_state")
+    streamlit.session_state["uploaded_image"] = None
 
 # print(image_data)
 # if len(image_data) > 0:
@@ -94,47 +100,159 @@ image = streamlit.file_uploader(
 #         print(image.type)
 #         streamlit.image(image)
 
-if image:
-    streamlit.write(image)
+image = streamlit.session_state["uploaded_image"]
+streamlit.write(image)
+if image and isinstance(image, streamlit.typing.UploadedFile):
     streamlit.image(image)
 
+# if image:
+#     streamlit.write(image)
+#     streamlit.image(image)
+
 selected_model = streamlit.selectbox("Select model", available_models, index=0)
-streamlit.write(selected_model)
+if not isinstance(selected_model, str) or selected_model not in available_models:
+    streamlit.error(f"Incorrect model selected: {selected_model}")
+# streamlit.write(selected_model)
 
 extract_button = streamlit.button("Extract")
-streamlit.write(extract_button)
+# streamlit.write(extract_button)
 
-detections = []
-if extract_button and image and \
-    isinstance(selected_model, str) and selected_model in available_models:
-    streamlit.write("button pressed")
+if "detections" not in streamlit.session_state:
+    streamlit.session_state["detections"] = []
+
+while extract_button:
+    # streamlit.write("button pressed")
+
+    if image is None:
+        streamlit.error("Upload image of attendance sheet.")
+        break
+
+    if not isinstance(selected_model, str):
+        streamlit.error("selected model is not str")
+        break
+
     image_data = image.getvalue()
     image_mimetype = image.type
     with streamlit.spinner("Model is processing..."):
         detections = extract_rollno(image.name, image_data, image_mimetype, selected_model)
+        streamlit.session_state["detections"] = detections
 
-streamlit.write(detections)
+    break
+
+detections = streamlit.session_state["detections"]
+streamlit.write(streamlit.session_state["detections"])
+streamlit.code(body=json.dumps([
+    {
+        "roll_text": d.rollno_text,
+        "bounding_box": d.bounding_box
+    } for d in streamlit.session_state["detections"]]))
 
 image_font = ImageFont.load_default(size=20)
 
+if "current_index" not in streamlit.session_state:
+    streamlit.session_state["current_index"] = 0
+
+def increment_index():
+    """increment index"""
+    if len(detections) > 0:
+        streamlit.session_state["current_index"] += 1
+        if streamlit.session_state["current_index"] >= len(detections):
+            streamlit.session_state["current_index"] = 0
+
+def decrement_index():
+    """decrement_index"""
+    if len(detections) > 0:
+        streamlit.session_state["current_index"] -= 1
+        if streamlit.session_state["current_index"] < 0:
+            streamlit.session_state["current_index"] = len(detections) - 1
+
+with streamlit.container(
+    width="content", height="content",
+    horizontal=True, horizontal_alignment="left",
+    vertical_alignment="center", gap=5):
+    streamlit.write("Change index:")
+    if streamlit.button("Prev", icon="⬅️"):
+        decrement_index()
+    if streamlit.button("Next", icon="➡️"):
+        increment_index()
+
+index = streamlit.session_state["current_index"]
+
+with streamlit.container(
+    width="content", height="content",
+    horizontal=True, horizontal_alignment="left",
+    vertical_alignment="center", gap=5):
+    streamlit.write("Index: ")
+    streamlit.write(index)
+
+if index >= 0 and index < len(detections):
+    streamlit.write(detections[index])
+
 if image:
     viz_image = Image.open(image)
-    streamlit.write(viz_image.size)
+    with streamlit.container(width="content", height="content",
+                             horizontal=True, horizontal_alignment="left",
+                             vertical_alignment="center", gap=5):
+        streamlit.write("image_size:")
+        streamlit.write(viz_image.size)
     draw = ImageDraw.Draw(viz_image)
     draw.rectangle(
-        [10, 10, viz_image.size[0] - 10, viz_image.size[1] - 10],
-        outline="red", width=2
+        [4, 4, viz_image.size[0] - 4, viz_image.size[1] - 4],
+        outline="blue", width=2
     )
-    for i, detection in enumerate(detections):
-        if i == 2:
-            streamlit.write(detection)
-            x1 = (detection.bounding_box[0] * viz_image.size[0] // 1000) - 2
-            y1 = (detection.bounding_box[1] * viz_image.size[1] // 1000) - 2
-            x2 = (detection.bounding_box[2] * viz_image.size[0] // 1000) + 2
-            y2 = (detection.bounding_box[3] * viz_image.size[1] // 1000) + 2
-            draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
-            draw.rectangle((x2 + 4, y1 - 1, x2 + 130, y1 + 24), fill="white")
-            draw.text((x2 + 5, y1), detection.rollno_text, fill="red", font=image_font)
-            break
 
-    streamlit.image(viz_image)
+    DISPLAY_W = 720
+    scale = DISPLAY_W / viz_image.size[0]
+
+    if index >= 0 and index < len(detections):
+        detection = detections[index]
+        x1 = (detection.bounding_box[0] * viz_image.size[0] // 1000) - 2
+        y1 = (detection.bounding_box[1] * viz_image.size[1] // 1000) - 2
+        x2 = (detection.bounding_box[2] * viz_image.size[0] // 1000) + 2
+        y2 = (detection.bounding_box[3] * viz_image.size[1] // 1000) + 2
+        draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
+        # draw.rectangle((x2 + 4, y1 - 1, x2 + 130, y1 + 24), fill="white")
+        # draw.text((x2 + 5, y1), detection.rollno_text, fill="red", font=image_font)
+
+        with streamlit.container(key="stage"):
+            streamlit.image(viz_image, width=DISPLAY_W)
+            with streamlit.container(key="controls", width="content",
+                                     height="content", horizontal=True,
+                                     horizontal_alignment="center",
+                                     vertical_alignment="center", gap=5):
+                val = streamlit.text_input("Roll", detection.rollno_text, key=f"v{index}", label_visibility="collapsed", width=150)
+                accept = streamlit.button("✅", key=f"a{index}")
+                reject = streamlit.button("❌", key=f"r{index}")
+
+        if accept:
+            # detection.rollno_text = val
+            streamlit.toast("Accept button pressed.", icon="✅")
+
+        x1, y1, x2, y2 = [int(c * scale) for c in [x1, y1, x2, y2]]
+        streamlit.html(f"""
+        <style>
+            .st-key-stage {{ 
+                position: relative;
+                # width: {DISPLAY_W}px;
+            }}
+            
+            .st-key-controls {{
+                position: absolute;
+                left: {x1}px;
+                top: {y2 + 2}px;
+                z-index: 10;
+                background: rgba(255, 255, 255, .60);
+                border-radius: 5px;
+                padding: 6px 8px;
+                width: auto;
+            }}
+
+            .st-key-controls input {{
+                font-size: 20px;
+                font-weight: 600;
+                text-align: center;
+            }}
+        </style>
+        """)
+
+    # streamlit.image(viz_image)
