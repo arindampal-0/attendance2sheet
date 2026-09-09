@@ -1,10 +1,15 @@
 """main file"""
-from PIL import Image, ImageDraw, ImageFont
+import sys
 import json
+import base64
+
+from PIL import Image, ImageDraw, ImageFont
 
 import streamlit
 from google import genai
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+
+import custom_component
 
 @streamlit.cache_resource
 def get_gemini_client():
@@ -32,7 +37,7 @@ class RollNoDetection(BaseModel):
 
 detection_list_adapter = TypeAdapter(list[RollNoDetection])
 
-available_models = ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.8-flash"]
+available_models = ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.8-flash"]
 
 @streamlit.cache_data(scope="session", show_spinner=False)
 def extract_rollno(image_name: str, _image_bytes: bytes, mimetype: str,
@@ -149,8 +154,8 @@ streamlit.code(body=json.dumps([
 
 image_font = ImageFont.load_default(size=20)
 
-if "current_index" not in streamlit.session_state:
-    streamlit.session_state["current_index"] = 0
+# adds default value if key not already exists.
+streamlit.session_state.setdefault("current_index", 0);
 
 def increment_index():
     """increment index"""
@@ -173,8 +178,12 @@ with streamlit.container(
     streamlit.write("Change index:")
     if streamlit.button("Prev", icon="⬅️"):
         decrement_index()
+        # streamlit.rerun()
+        # print("prev pressed:", streamlit.session_state["current_index"])
     if streamlit.button("Next", icon="➡️"):
         increment_index()
+        # streamlit.rerun()
+        # print("next pressed:", streamlit.session_state["current_index"])
 
 index = streamlit.session_state["current_index"]
 
@@ -188,71 +197,113 @@ with streamlit.container(
 if index >= 0 and index < len(detections):
     streamlit.write(detections[index])
 
-if image:
-    viz_image = Image.open(image)
-    with streamlit.container(width="content", height="content",
-                             horizontal=True, horizontal_alignment="left",
-                             vertical_alignment="center", gap=5):
-        streamlit.write("image_size:")
-        streamlit.write(viz_image.size)
-    draw = ImageDraw.Draw(viz_image)
-    draw.rectangle(
-        [4, 4, viz_image.size[0] - 4, viz_image.size[1] - 4],
-        outline="blue", width=2
-    )
+# if image:
+#     viz_image = Image.open(image)
+#     with streamlit.container(width="content", height="content",
+#                              horizontal=True, horizontal_alignment="left",
+#                              vertical_alignment="center", gap=5):
+#         streamlit.write("image_size:")
+#         streamlit.write(viz_image.size)
+#     draw = ImageDraw.Draw(viz_image)
+#     draw.rectangle(
+#         [4, 4, viz_image.size[0] - 4, viz_image.size[1] - 4],
+#         outline="blue", width=2
+#     )
 
-    DISPLAY_W = 720
-    scale = DISPLAY_W / viz_image.size[0]
+#     DISPLAY_W = 720
+#     scale = DISPLAY_W / viz_image.size[0]
+
+#     if index >= 0 and index < len(detections):
+#         detection = detections[index]
+#         x1 = (detection.bounding_box[0] * viz_image.size[0] // 1000) - 2
+#         y1 = (detection.bounding_box[1] * viz_image.size[1] // 1000) - 2
+#         x2 = (detection.bounding_box[2] * viz_image.size[0] // 1000) + 2
+#         y2 = (detection.bounding_box[3] * viz_image.size[1] // 1000) + 2
+#         draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
+#         # draw.rectangle((x2 + 4, y1 - 1, x2 + 130, y1 + 24), fill="white")
+#         # draw.text((x2 + 5, y1), detection.rollno_text, fill="red", font=image_font)
+
+#         with streamlit.container(key="stage"):
+#             streamlit.image(viz_image, width=DISPLAY_W)
+#             with streamlit.container(key="controls", width="content",
+#                                      height="content", horizontal=True,
+#                                      horizontal_alignment="center",
+#                                      vertical_alignment="center", gap=5):
+#                 val = streamlit.text_input("Roll", detection.rollno_text, key=f"v{index}", label_visibility="collapsed", width=150)
+#                 accept = streamlit.button("✅", key=f"a{index}")
+#                 reject = streamlit.button("❌", key=f"r{index}")
+
+#         if accept:
+#             # detection.rollno_text = val
+#             streamlit.toast("Accept button pressed.", icon="✅")
+
+#         x1, y1, x2, y2 = [int(c * scale) for c in [x1, y1, x2, y2]]
+#         streamlit.html(f"""
+#         <style>
+#             .st-key-stage {{ 
+#                 position: relative;
+#                 # width: {DISPLAY_W}px;
+#             }}
+            
+#             .st-key-controls {{
+#                 position: absolute;
+#                 left: {x1}px;
+#                 top: {y2 + 2}px;
+#                 z-index: 10;
+#                 background: rgba(255, 255, 255, .60);
+#                 border-radius: 5px;
+#                 padding: 6px 8px;
+#                 width: auto;
+#             }}
+
+#             .st-key-controls input {{
+#                 font-size: 20px;
+#                 font-weight: 600;
+#                 text-align: center;
+#             }}
+#         </style>
+#         """)
+
+#    streamlit.image(viz_image)
+
+def on_index_step_changed() -> None:
+    """on index step changed"""
+    print("on_index_step_changed", streamlit.session_state["detection_visualizer"])
+    step = streamlit.session_state["detection_visualizer"].index_step
+    if step:
+        if step == -1:
+            decrement_index()
+        elif step == 1:
+            increment_index()
+
+if image:
+    image_bytes = image.getvalue()
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
 
     if index >= 0 and index < len(detections):
         detection = detections[index]
-        x1 = (detection.bounding_box[0] * viz_image.size[0] // 1000) - 2
-        y1 = (detection.bounding_box[1] * viz_image.size[1] // 1000) - 2
-        x2 = (detection.bounding_box[2] * viz_image.size[0] // 1000) + 2
-        y2 = (detection.bounding_box[3] * viz_image.size[1] // 1000) + 2
-        draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
-        # draw.rectangle((x2 + 4, y1 - 1, x2 + 130, y1 + 24), fill="white")
-        # draw.text((x2 + 5, y1), detection.rollno_text, fill="red", font=image_font)
 
-        with streamlit.container(key="stage"):
-            streamlit.image(viz_image, width=DISPLAY_W)
-            with streamlit.container(key="controls", width="content",
-                                     height="content", horizontal=True,
-                                     horizontal_alignment="center",
-                                     vertical_alignment="center", gap=5):
-                val = streamlit.text_input("Roll", detection.rollno_text, key=f"v{index}", label_visibility="collapsed", width=150)
-                accept = streamlit.button("✅", key=f"a{index}")
-                reject = streamlit.button("❌", key=f"r{index}")
+        custom_component.create_detection_visualizer({
+            "index": index,
+            "detections_count": len(detections),
+            "image_mimetype": image.type,
+            "image_base64": image_base64,
+            "rollno_text": detection.rollno_text,
+            "bounding_box": detection.bounding_box,
+        }, on_index_step_change=on_index_step_changed)
 
-        if accept:
-            # detection.rollno_text = val
-            streamlit.toast("Accept button pressed.", icon="✅")
+streamlit.divider()
 
-        x1, y1, x2, y2 = [int(c * scale) for c in [x1, y1, x2, y2]]
-        streamlit.html(f"""
-        <style>
-            .st-key-stage {{ 
-                position: relative;
-                # width: {DISPLAY_W}px;
-            }}
-            
-            .st-key-controls {{
-                position: absolute;
-                left: {x1}px;
-                top: {y2 + 2}px;
-                z-index: 10;
-                background: rgba(255, 255, 255, .60);
-                border-radius: 5px;
-                padding: 6px 8px;
-                width: auto;
-            }}
+streamlit.session_state.setdefault("count", 0)
 
-            .st-key-controls input {{
-                font-size: 20px;
-                font-weight: 600;
-                text-align: center;
-            }}
-        </style>
-        """)
+def on_click():
+    """on click"""
+    print(streamlit.session_state["counter"])
+    step = streamlit.session_state["counter"].clicked
+    print("step:", step)
+    if step:
+        streamlit.session_state["count"] += step
 
-    # streamlit.image(viz_image)
+custom_component.create_counter(streamlit.session_state["count"], on_clicked_change=on_click)
+
+streamlit.write("Python sees:", streamlit.session_state.count)
